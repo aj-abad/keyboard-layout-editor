@@ -41,6 +41,31 @@ test('history is bounded and no-op edits do not add undo entries', () => {
   assert.equal(editor.canUndo.value, false)
 })
 
+test('a legend edited in place changes that key alone, as one undo step', () => {
+  const editor = blankEditor()
+  editor.addKey()
+  const first = editor.selectedIds.value[0]!
+  editor.addKey()
+  const second = editor.selectedIds.value[0]!
+  editor.selectIds([first, second])
+  const labels = (id: string) => editor.layout.value.keys.find(key => key.id === id)!.labels
+  editor.updateKeyLegend(second, 7, 'Fn')
+  assert.equal(labels(second)[7], 'Fn')
+  assert.equal(labels(first)[7] || '', '')
+  assert.ok(Array.from(labels(second)).every(label => typeof label === 'string'), 'no holes before the slot')
+  assert.deepEqual(editor.selectedIds.value, [first, second])
+  // The same text, a slot KLE doesn't have, and a missing key change nothing.
+  editor.updateKeyLegend(second, 7, 'Fn')
+  editor.updateKeyLegend(second, 12, 'X')
+  editor.updateKeyLegend(second, 1.5, 'X')
+  editor.updateKeyLegend('missing', 0, 'X')
+  editor.undo()
+  assert.equal(labels(second)[7] || '', '')
+  editor.undo()
+  editor.undo()
+  assert.equal(editor.canUndo.value, false)
+})
+
 test('selection toggles, marquee adds, and copies get new ids', () => {
   const editor = blankEditor()
   editor.addKey()
@@ -183,7 +208,7 @@ test('corrupt drafts show a recoverable error without overwriting browser storag
     setItem: () => { writes++ },
   } })
   assert.equal(editor.layout.value.keys.length, 0)
-  assert.match(editor.storageError.value, /restored/)
+  assert.match(editor.storageError.value, /restore/)
   assert.equal(writes, 0)
   editor.addKey()
   assert.equal(writes, 1)

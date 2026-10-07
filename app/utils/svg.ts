@@ -3,6 +3,11 @@ import type { Layout } from './layout'
 type Key = Layout['keys'][number]
 export const UNIT = 54
 export const SYSTEM_FONT = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+/** The keycap artwork's own strokes, shared by the editor and every export. */
+export const KEYCAP_EDGE = '#52525b'
+export const KEYCAP_TOP_EDGE = '#00000020'
+export const KEYCAP_NUB = '#00000040'
+export const PLATE_FALLBACK = '#f4f4f5'
 type Point = { x: number; y: number }
 type Rect = Point & { width: number; height: number }
 
@@ -115,24 +120,96 @@ export function canvasFrame(layout: Layout, padding = 24) {
   return { x, y, width: Math.max(UNIT + padding * 2, right - x), height: Math.max(UNIT + padding * 2, bottom - y) }
 }
 
-export function keyGeometry(key: Key) {
-  const profile = /\b(SA|DSA|DCS|OEM|CHICKLET|FLAT)\b/i.exec(key.profile)?.[1]?.toUpperCase() ?? 'DCS'
-  const spacing = profile === 'CHICKLET' ? 3 : profile === 'FLAT' ? 1 : 1
+const profileOf = (key: Key) => /\b(SA|DSA|DCS|OEM|CHICKLET|FLAT)\b/i.exec(key.profile)?.[1]?.toUpperCase() ?? 'DCS'
+const spacingOf = (profile: string) => profile === 'CHICKLET' ? 3 : 1
+
+/** The cap's outline moved `distance` px outward: where a focus ring is drawn around it. */
+export function keyRing(key: Key, distance: number): string {
+  const spacing = spacingOf(profileOf(key))
+  return outline(keyRects(key).map(rect => inset(rect, spacing - distance)), 4 + distance)
+}
+
+/** The cap's surfaces in its own coordinates: the outer outline, the top face, and the face's text area. */
+function capFaces(key: Key) {
+  const profile = profileOf(key)
+  const spacing = spacingOf(profile)
   const bevel = profile === 'CHICKLET' || profile === 'FLAT' ? 1 : 5
   const offset = profile === 'DSA' ? 0 : profile === 'SA' ? 2 : profile === 'FLAT' || profile === 'CHICKLET' ? 0 : 3
   const rects = keyRects(key)
   const outer = rects.map(rect => inset(rect, spacing))
   const inner = (key.stepped ? rects.slice(0, 1) : rects).map(rect => inset(rect, spacing + bevel, offset))
   const primary = inner[0]!
-  const text = inset(primary, 3)
-  const labels = key.ghost ? [] : key.labels.flatMap((value, slot) => {
-    if (!value || slot > 11 || (slot > 8 && (profile === 'FLAT' || profile === 'CHICKLET'))) return []
+  return { profile, rects, outer, inner, primary, text: inset(primary, 3) }
+}
+
+const ANCHORS = ['start', 'middle', 'end'] as const
+export interface LegendSlot {
+  slot: number
+  /** The slot's anchor on its first line's baseline: its left, center or right. */
+  x: number
+  y: number
+  size: number
+  anchor: (typeof ANCHORS)[number]
+  /**
+   * Where a pointer finds the slot: a third of the face across and a line
+   * high, so a blank slot, or one holding a single dot, is still a target.
+   */
+  area: Rect
+}
+
+/**
+ * Every legend position the cap's profile draws, written or blank, in the
+ * cap's own coordinates before its rotation. Flat and chiclet caps have no
+ * front legends.
+ */
+export function legendSlots(key: Key): LegendSlot[] {
+  const { profile, rects, text } = capFaces(key)
+  const count = profile === 'FLAT' || profile === 'CHICKLET' ? 9 : 12
+  return Array.from({ length: count }, (_, slot) => {
     const size = slot > 8 ? 10 : 6 + 2 * (key.textSize[slot] || key.default.textSize)
-    const lines = value.split('\n')
+    const lines = (key.labels[slot] ?? '').split('\n').length
     const column = slot % 3, row = Math.floor(slot / 3)
     const x = column === 0 ? text.x : column === 1 ? text.x + text.width / 2 : text.x + text.width
-    const y = row === 0 ? text.y + size * 0.8 : row === 1 ? text.y + text.height / 2 + size * 0.32 - (lines.length - 1) * size / 2 : row === 2 ? text.y + text.height - size * 0.2 - (lines.length - 1) * size : rects[0]!.y + rects[0]!.height - 4
-    return [{ slot, lines, x, y, size, color: safeColor(key.textColor[slot] || key.default.textColor, '#111827'), anchor: (['start', 'middle', 'end'] as const)[column]! }]
+    const y = row === 0 ? text.y + size * 0.8 : row === 1 ? text.y + text.height / 2 + size * 0.32 - (lines - 1) * size / 2 : row === 2 ? text.y + text.height - size * 0.2 - (lines - 1) * size : rects[0]!.y + rects[0]!.height - 4
+    const width = Math.max(text.width / 3, size)
+    const left = column === 0 ? x : column === 1 ? x - width / 2 : x - width
+    return { slot, x, y, size, anchor: ANCHORS[column]!, area: { x: left, y: y - size * 0.9, width, height: size * 1.2 } }
+  })
+}
+
+/**
+ * The slot a point on the cap names, in the cap's own coordinates: a written
+ * legend whose drawn text holds the point (`drawn`, by slot), else the slot
+ * whose area is nearest, its center settling areas that overlap. Anywhere on
+ * a cap names one of its legends.
+ */
+export function legendSlotAt(key: Key, point: Point, drawn: Partial<Record<number, Rect>> = {}): number {
+  const slots = legendSlots(key)
+  const holds = (rect: Rect) => point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height
+  const written = slots.find(({ slot }) => {
+    const text = drawn[slot]
+    return key.labels[slot] && text && holds(text)
+  })
+  if (written) return written.slot
+  const gap = (rect: Rect) => Math.hypot(Math.max(rect.x - point.x, 0, point.x - rect.x - rect.width), Math.max(rect.y - point.y, 0, point.y - rect.y - rect.height))
+  const offCenter = (rect: Rect) => Math.hypot(point.x - rect.x - rect.width / 2, point.y - rect.y - rect.height / 2)
+  return slots.reduce((best, slot) => {
+    const difference = gap(slot.area) - gap(best.area)
+    return difference < 0 || (difference === 0 && offCenter(slot.area) < offCenter(best.area)) ? slot : best
+  }).slot
+}
+
+/** A legend's color: its own, else the key's default for its legends. */
+export function legendColor(key: Key, slot: number): string {
+  return safeColor(key.textColor[slot] || key.default.textColor, '#111827')
+}
+
+export function keyGeometry(key: Key) {
+  const { profile, rects, outer, inner, primary } = capFaces(key)
+  const labels = key.ghost ? [] : legendSlots(key).flatMap(({ slot, x, y, size, anchor }) => {
+    const value = key.labels[slot]
+    if (!value) return []
+    return [{ slot, lines: value.split('\n'), x, y, size, color: legendColor(key, slot), anchor }]
   })
   const color = safeColor(key.color)
   return { outer: outline(outer, 4), inner: outline(inner, profile === 'DSA' ? 7 : 3), hit: outline(rects, 0), color, topColor: lighten(color), labels, transform: `rotate(${key.rotation_angle} ${key.rotation_x * UNIT} ${key.rotation_y * UNIT})`, nub: { x1: primary.x + primary.width / 2 - 5, x2: primary.x + primary.width / 2 + 5, y: primary.y + primary.height - 4 } }
@@ -142,10 +219,10 @@ export function layoutToSvg(layout: Layout): string {
   const frame = canvasFrame(layout)
   const keys = layout.keys.map((key, index) => {
     const shape = keyGeometry(key), clipId = `legend-${index}`
-    const cap = key.decal ? '' : `<path d="${shape.outer}" fill="${shape.color}" stroke="#52525b" stroke-width="1"${key.ghost ? ' stroke-dasharray="3 3"' : ''}/>${key.ghost ? '' : `<path d="${shape.inner}" fill="${shape.topColor}" stroke="#00000020" stroke-width="0.8"/>`}`
+    const cap = key.decal ? '' : `<path d="${shape.outer}" fill="${shape.color}" stroke="${KEYCAP_EDGE}" stroke-width="1"${key.ghost ? ' stroke-dasharray="3 3"' : ''}/>${key.ghost ? '' : `<path d="${shape.inner}" fill="${shape.topColor}" stroke="${KEYCAP_TOP_EDGE}" stroke-width="0.8"/>`}`
     const labels = shape.labels.map(label => `<text x="${label.x}" y="${label.y}" text-anchor="${label.anchor}" font-size="${label.size}" fill="${label.color}">${label.lines.map((line, lineIndex) => `<tspan x="${label.x}" dy="${lineIndex ? label.size : 0}">${escapeXml(line)}</tspan>`).join('')}</text>`).join('')
-    const nub = key.nub && !key.ghost && !key.decal ? `<line x1="${shape.nub.x1}" x2="${shape.nub.x2}" y1="${shape.nub.y}" y2="${shape.nub.y}" stroke="#00000040" stroke-width="2" stroke-linecap="round"/>` : ''
+    const nub = key.nub && !key.ghost && !key.decal ? `<line x1="${shape.nub.x1}" x2="${shape.nub.x2}" y1="${shape.nub.y}" y2="${shape.nub.y}" stroke="${KEYCAP_NUB}" stroke-width="2" stroke-linecap="round"/>` : ''
     return `<g transform="${shape.transform}"${key.ghost ? ' opacity="0.45"' : ''}><defs><clipPath id="${clipId}"><path d="${shape.hit}"/></clipPath></defs>${cap}<g clip-path="url(#${clipId})">${labels}${nub}</g></g>`
   }).join('')
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${frame.width}" height="${frame.height}" viewBox="${frame.x} ${frame.y} ${frame.width} ${frame.height}" font-family="${escapeXml(SYSTEM_FONT)}"><title>${escapeXml(layout.meta.name || 'Keyboard layout')}</title><rect x="${frame.x}" y="${frame.y}" width="${frame.width}" height="${frame.height}" fill="${safeColor(layout.meta.backcolor, '#f4f4f5')}"/>${keys}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${frame.width}" height="${frame.height}" viewBox="${frame.x} ${frame.y} ${frame.width} ${frame.height}" font-family="${escapeXml(SYSTEM_FONT)}"><title>${escapeXml(layout.meta.name || 'Keyboard layout')}</title><rect x="${frame.x}" y="${frame.y}" width="${frame.width}" height="${frame.height}" fill="${safeColor(layout.meta.backcolor, PLATE_FALLBACK)}"/>${keys}</svg>`
 }

@@ -290,7 +290,7 @@ export function parseLayout(text: string): Layout {
   try { rows = JSON5.parse(source) }
   catch {
     try { rows = JSON5.parse(`[${source}]`) }
-    catch (reason) { throw new Error(`Could not read layout JSON: ${reason instanceof Error ? reason.message : String(reason)}`) }
+    catch (reason) { throw new Error(`Couldn’t read the JSON: ${(reason instanceof Error ? reason.message : String(reason)).replace(/^JSON5: /, '')}`) }
   }
   if (Array.isArray(rows) && rows.some(value => typeof value === 'string')) rows = [rows]
   return deserialize(rows)
@@ -298,6 +298,12 @@ export function parseLayout(text: string): Layout {
 
 export function stringifyLayout(layout: Layout, space = 2): string {
   return JSON.stringify(serialize(layout), null, space)
+}
+
+/** KLE's raw data as KLE's own editor shows it: the metadata, then one row of keys a line. */
+export function stringifyRows(layout: Layout): string {
+  const rows = serialize(layout)
+  return rows.length ? `[\n${rows.map(row => `  ${JSON.stringify(row)}`).join(',\n')}\n]` : '[]'
 }
 
 export function keyBounds(key: Key): Bounds {

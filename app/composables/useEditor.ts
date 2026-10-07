@@ -11,11 +11,35 @@ interface EditorOptions {
   initialLayout?: Layout
   storage?: DraftStorage | null
   historyLimit?: number
+  baseline?: string
 }
 interface Snapshot { layout: Layout; selectedIds: string[] }
 
 const clone = <T>(value: T): T => structuredClone(value)
 const round = (value: number) => Math.round(value * 1e6) / 1e6
+
+/** Where the copied keys are kept as KLE JSON, so every tab of this browser can paste them. */
+export const CLIPBOARD_STORAGE_KEY = 'kle-clipboard-v1'
+
+function storedClipboard(): Key[] {
+  try {
+    const text = typeof window === 'undefined' ? null : window.localStorage.getItem(CLIPBOARD_STORAGE_KEY)
+    return text ? parseLayout(text).keys : []
+  } catch { return [] }
+}
+
+/**
+ * One clipboard for every open layout, as a native app has: keys copied in one
+ * layout's tab paste into another's. Each paste steps a quarter unit further along.
+ */
+const sharedClipboard = { keys: shallowRef<Key[]>(storedClipboard()), pastes: 0 }
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', event => {
+    if (event.key !== CLIPBOARD_STORAGE_KEY) return
+    sharedClipboard.keys.value = storedClipboard()
+    sharedClipboard.pastes = 0
+  })
+}
 
 /** One local editor instance. Every edit stores a complete, bounded undo snapshot. */
 export function useEditor(options: EditorOptions = {}) {
@@ -23,16 +47,17 @@ export function useEditor(options: EditorOptions = {}) {
   const initial = options.initialLayout ? clone(options.initialLayout) : deserialize(preset.data)
   if (!options.initialLayout && !initial.meta.name) initial.meta.name = preset.name
   const currentLayout = shallowRef<Layout>(initial)
+  const baseline = shallowRef(options.baseline ?? stringifyLayout(initial, 0))
   const currentSelection = shallowRef<string[]>([])
   const past = shallowRef<Snapshot[]>([])
   const future = shallowRef<Snapshot[]>([])
-  const clipboard = shallowRef<Key[]>([])
-  let pasteCount = 0
+  const clipboard = sharedClipboard.keys
   const storageError = shallowRef('')
   const historyLimit = Math.max(1, Math.floor(options.historyLimit ?? 100))
   let storage: DraftStorage | null = null
 
   const layout = computed(() => currentLayout.value)
+  const isDirty = computed(() => stringifyLayout(currentLayout.value, 0) !== baseline.value)
   const selectedIds = computed(() => currentSelection.value)
   const selectedKeys = computed(() => {
     const selection = new Set(currentSelection.value)
@@ -48,7 +73,7 @@ export function useEditor(options: EditorOptions = {}) {
     const saved = storage?.getItem(DRAFT_STORAGE_KEY)
     if (saved) currentLayout.value = parseLayout(saved)
   } catch {
-    storageError.value = 'The browser draft could not be restored. Export JSON to keep a copy.'
+    storageError.value = 'Couldn’t restore the layouts this browser saved. Export JSON to keep a copy.'
   }
 
   function saveDraft() {
@@ -57,7 +82,7 @@ export function useEditor(options: EditorOptions = {}) {
       storage.setItem(DRAFT_STORAGE_KEY, stringifyLayout(currentLayout.value))
       storageError.value = ''
     } catch {
-      storageError.value = 'Browser autosave is unavailable. Export JSON to keep a copy.'
+      storageError.value = 'Couldn’t autosave in this browser. Export JSON to keep a copy.'
     }
   }
   function snapshot(): Snapshot {
@@ -106,6 +131,10 @@ export function useEditor(options: EditorOptions = {}) {
     commit(next, [])
   }
   function importLayout(text: string) { commit(parseLayout(text), []) }
+  /** Apply a layout already validated by the background parser. */
+  function applyLayout(next: Layout) { commit(clone(next), []) }
+  function markClean() { baseline.value = stringifyLayout(currentLayout.value, 0) }
+  function replaceLayout(next: Layout) { applyLayout(next); markClean() }
   function selectKey(id: string, additive = false) {
     if (!currentLayout.value.keys.some(key => key.id === id)) return
     currentSelection.value = additive
@@ -161,16 +190,25 @@ export function useEditor(options: EditorOptions = {}) {
     commit(next, copies.map(key => key.id))
   }
   function duplicateSelected() { insertCopies(selectedKeys.value, .25, .25) }
+  /** Alt-drag inserts copies only on a displaced drop, keeping the originals intact. */
+  function duplicateDragged(ids: string[], dx: number, dy: number) {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || (!dx && !dy)) return
+    const sources = new Set(ids)
+    insertCopies(currentLayout.value.keys.filter(key => sources.has(key.id)), dx, dy)
+  }
   function copy() {
     if (!selectedKeys.value.length) return
     clipboard.value = clone(selectedKeys.value)
-    pasteCount = 0
+    sharedClipboard.pastes = 0
+    try {
+      if (typeof window !== 'undefined') window.localStorage.setItem(CLIPBOARD_STORAGE_KEY, stringifyLayout({ meta: deserialize([]).meta, keys: clipboard.value }, 0))
+    } catch { /* This tab still has them; other tabs won't. */ }
   }
   function cut() { copy(); deleteSelected() }
   function paste() {
     if (!clipboard.value.length) return
-    pasteCount++
-    insertCopies(clipboard.value, .25 * pasteCount, .25 * pasteCount)
+    const offset = .25 * ++sharedClipboard.pastes
+    insertCopies(clipboard.value, offset, offset)
   }
 
   function updateKeys(patch: Partial<Key>) {
@@ -191,9 +229,24 @@ export function useEditor(options: EditorOptions = {}) {
       key.default = defaults
     })
   }
+  const isLegendSlot = (index: number) => Number.isInteger(index) && index >= 0 && index <= 11
+  /** Write one slot, filling the slots before it so the labels never have holes. */
+  function writeLegend(key: Key, index: number, text: string) {
+    while (key.labels.length < index) key.labels.push('')
+    key.labels[index] = text
+  }
   function updateLegend(index: number, text: string) {
-    if (!Number.isInteger(index) || index < 0 || index > 11) return
-    editSelection(key => { key.labels[index] = text })
+    if (!isLegendSlot(index)) return
+    editSelection(key => writeLegend(key, index, text))
+  }
+  /** One key's legend, as the stage's in-place editor writes it; the selection is left as it is. */
+  function updateKeyLegend(id: string, index: number, text: string) {
+    if (!isLegendSlot(index)) return
+    const next = clone(currentLayout.value)
+    const key = next.keys.find(key => key.id === id)
+    if (!key || (key.labels[index] ?? '') === text) return
+    writeLegend(key, index, text)
+    commit(next)
   }
   function setTextColor(color: string) {
     editSelection(key => { key.default.textColor = color; key.textColor = [] })
@@ -235,9 +288,9 @@ export function useEditor(options: EditorOptions = {}) {
   }
 
   return {
-    layout, selectedIds, selectedKeys, canUndo, canRedo, canPaste, storageError,
-    loadPreset, importLayout, undo, redo, selectKey, selectIds, clearSelection, selectAll,
-    addKey, deleteSelected, duplicateSelected, copy, cut, paste, moveSelected,
-    updateKeys, updateLegend, setTextColor, setTextSize, resizeSelected, resizeKey, rotateSelected, updateMeta,
+    layout, selectedIds, selectedKeys, canUndo, canRedo, canPaste, storageError, baseline, isDirty,
+    loadPreset, importLayout, applyLayout, replaceLayout, markClean, undo, redo, selectKey, selectIds, clearSelection, selectAll,
+    addKey, deleteSelected, duplicateSelected, duplicateDragged, copy, cut, paste, moveSelected,
+    updateKeys, updateLegend, updateKeyLegend, setTextColor, setTextSize, resizeSelected, resizeKey, rotateSelected, updateMeta,
   }
 }

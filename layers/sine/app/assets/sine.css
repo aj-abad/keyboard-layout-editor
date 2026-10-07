@@ -1,0 +1,954 @@
+/*
+ * Arcon Sine's stylesheet, exported as `@arcon.mobi/sine/css`: Tailwind's three
+ * layers with the system's own rules around them, so it is a whole Tailwind
+ * entry, never a partial to import beside another `@tailwind base`.
+ *
+ * An app that extends the layer gets it through `@nuxtjs/tailwindcss` and
+ * writes nothing. A build outside Nuxt makes it the entry, with the theme and
+ * plugins from `@arcon.mobi/sine/tailwind` as a preset and the layer's
+ * components in its content paths.
+ */
+@tailwind base;
+
+@property --squircle-opacity {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+
+@property --squircle-group-opacity {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+
+.squircle {
+  position: relative;
+  z-index: 0;
+}
+
+:where(.squircle) > * {
+  opacity: calc(var(--squircle-group-opacity) * var(--squircle-opacity));
+}
+
+.squircle__shadow {
+  position: absolute;
+  z-index: -20;
+  pointer-events: none;
+}
+
+.squircle__surface {
+  position: absolute;
+  inset: 0;
+  z-index: -10;
+}
+
+/* A recessed surface's shadow falls on its own floor: over the fill, under the
+   content, where `box-shadow: inset` paints. */
+.squircle__shadow--inset {
+  z-index: -5;
+}
+
+.squircle__strokes {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+/* The lit rim, inside the surface and over its wash: light, so it is added to
+   the surface rather than laid over it. See `glassEdge` in
+   `tailwind.config.ts`, and `SquircleChrome` for why it is inside. */
+.squircle__rim {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  mix-blend-mode: plus-lighter;
+}
+
+/* The strokes before the squircle has measured itself (server-rendered HTML,
+   until it hydrates): an inset ring, or a CSS border where the sides differ, on
+   a rounded rectangle at the strokes' depth. See `SquircleChrome`'s
+   `fallbackStroke`. */
+.squircle__strokes-fallback {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.squircle__defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* A squircle that clips its content lays that content out in flow: the root is
+   a column the clipped layer fills edge to edge, so the box keeps sizing to what
+   it holds, and the clip matches the surface because the two share one box. The
+   root's padding would inset the layer from the shape it is clipped to, so a
+   clipped squircle pads, and lays out, through `contentClass`. */
+.squircle--clip {
+  display: flex;
+  flex-direction: column;
+}
+
+.squircle__content {
+  position: relative;
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+:where(.squircle__surface--glass-sm) {
+  backdrop-filter: blur(4px) saturate(1.4);
+}
+
+:where(.squircle__surface--glass-md) {
+  backdrop-filter: blur(12px) saturate(1.6);
+}
+
+:where(.squircle__surface--glass-lg) {
+  backdrop-filter: blur(24px) saturate(1.8);
+}
+
+.squircle input:autofill {
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: var(--autofill-text, #000);
+}
+
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Fade a squircle by animating `--squircle-opacity`, never `opacity`.
+ *
+ * `backdrop-filter` samples the *Backdrop Root* — the nearest ancestor carrying
+ * an `opacity` below 1, a `filter`, or a `will-change` naming either. A
+ * squircle paints its glass on a child layer, because that is the only layer
+ * that can be clipped to the shape. So an `opacity` on whatever a caller
+ * animates — a `motion.div`, a Reka `data-state` keyframe — sits *above* the
+ * glass and blanks the backdrop it samples: the surface reads flat for the
+ * whole animation, then the blur snaps in on the single frame `opacity` reaches
+ * exactly 1 and the Backdrop Root dissolves.
+ *
+ * The repair is to fade the layers instead of the group. The local
+ * `UI/Squircle` rules above register the two properties
+ * (`--squircle-opacity`, `--squircle-group-opacity`) and the
+ * `:where(.squircle) > *` rule that multiplies them. Both inherit, so a caller
+ * sets either on any ancestor. They are two names rather than one because
+ * inherited custom properties do not compose the way nested `opacity` does — an
+ * inner element setting the same name *shadows* the outer value instead of
+ * multiplying with it, so a container fading a cluster
+ * (`--squircle-group-opacity`) needs a different name from the one a single
+ * panel animates for its own entrance (`--squircle-opacity`). See the inbox
+ * popover, where the detail panel runs its own spring inside a popover that
+ * fades as a whole.
+ *
+ * Two levels is the whole budget. A squircle fading inside the *content* of
+ * another fading squircle inherits the same name twice and fades twice over.
+ *
+ * The autofill repair is vendored with them: `.squircle input:autofill` clips
+ * the UA's forced fill to the glyphs, because an input is squircle *content*,
+ * the one layer deliberately left unclipped, so the fill would otherwise land
+ * as a hard rectangle whose corners stick out past the smoothed ones. Clipped,
+ * it is then covered by the opaque text, so the affordance has to be re-drawn
+ * on the surface layer — see `AUTOFILL_SURFACE` in `UI/Input.vue`. The forced
+ * `color` goes with it; `--autofill-text` is the escape hatch for a control
+ * whose text isn't black.
+ */
+
+@layer base {
+  ::selection {
+    @apply bg-brand/20;
+  }
+
+  /* `env()` is a CSS-only value; a sheet sized from JavaScript reads the
+     bottom safe-area inset back off this property — `safeAreaInsetBottom()`
+     in `utils/viewport.ts`. */
+  :root {
+    --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /*
+   * Text is selectable only where it has to be, as in a native app: on a work
+   * surface a drag, a Shift-click or a double-click is a gesture on an object,
+   * never a selection of its words. See Patterns › Text selection and copy.
+   *
+   * The rule sits on the root alone rather than on every element. Everything
+   * takes it through `auto`, so `select-text` opts an element in with
+   * everything inside it, and `select-none` inside that opts back out, and no
+   * rule here outranks a utility. A rule on `*` has to be beaten element by
+   * element, which leaves an opt-in no way to reach its children short of
+   * `!important`.
+   */
+  :root {
+    user-select: none;
+  }
+
+  /* A control never selects, wherever it sits, even inside text that does. */
+  :where(
+    button,
+    label,
+    summary,
+    [role="button"],
+    [role="checkbox"],
+    [role="menuitem"],
+    [role="menuitemcheckbox"],
+    [role="menuitemradio"],
+    [role="option"],
+    [role="radio"],
+    [role="slider"],
+    [role="switch"],
+    [role="tab"]
+  ) {
+    user-select: none;
+  }
+
+  /* Always content: a field's value, code, and the dev server's error
+     overlay. A read-only field is not editable, so without this its value
+     would take the root's `none` and could not be selected. */
+  input,
+  textarea,
+  [contenteditable]:not([contenteditable="false"]),
+  pre,
+  code,
+  vite-error-overlay {
+    user-select: text;
+  }
+}
+
+@layer components {
+  /*
+   * `.focus-ring`, `.focus-ring-within`, the `.type-*` roles and `.link` are NOT
+   * here — they are registered as a plugin in `tailwind.config.ts`.
+   *
+   * Tailwind resolves `@apply` against core utilities, the theme, and classes
+   * declared in the *same* stylesheet. An SFC's `<style>` block is its own
+   * PostCSS entry, so it cannot see anything in this file: `@apply focus-ring`
+   * there fails with "The `focus-ring` class does not exist". A class a
+   * component might `@apply` therefore belongs in the config; the ones below are
+   * only ever written in a template, which is why they can live here.
+   */
+
+  /*
+   * Glass, as one material at three levels: a white wash, a backdrop blur with
+   * saturation, a keyline, a lit rim and the glass shadow. Its keyline is the
+   * glass shade, `glassEdge.shade`; a hairline inside it, like a menu's
+   * divider, is `line`, which is translucent and reads as a shade of the glass.
+   *
+   * **Everything numeric here comes from `glass` in `tailwind.config.ts`.** The
+   * wash is generated by `glassWash()` as an *eased* multi-stop ramp rather
+   * than a two-stop gradient, and it moves with the blur: the more a level
+   * blurs away, the more of the surface's own body the wash carries. Read the
+   * table over that export before changing a number here.
+   *
+   * ## Two renderers, one definition
+   *
+   * A glass surface is drawn one of two ways, and which one is not a style
+   * choice — it is whether the shape is a squircle:
+   *
+   * - **A squircle** (`<Squircle glass="md">`, which is what `MenuSurface`,
+   *   the inbox, the toasts and the panels use) paints glass on its own clipped
+   *   surface layer, and its keyline is a *stroke* on the strokes layer. It has
+   *   to be: the corner is a `clip-path`, so a pseudo-element ring with
+   *   `border-radius: inherit` would cut across it.
+   * - **Anything else**, such as a true circle, takes `.glass-md`, and gets
+   *   the same wash with a pseudo-element keyline.
+   *
+   * The block below is shared by the class-based and squircle renderers. A
+   * caller's own `surfaceClass` utility still wins, which is how a solid menu
+   * overrides glass.
+   */
+  .glass,
+  .glass-sm,
+  .glass-md,
+  .glass-lg {
+    @apply shadow-glass;
+    position: relative;
+  }
+
+  /*
+   * The base rule comes **first**, and the three levels after it. A glass
+   * squircle carries both `--glass` and `--glass-<level>`, which tie on
+   * specificity, so source order is the only thing separating them: with the
+   * base written last, every `sm` surface in the app silently rendered the `md`
+   * wash. `Foundations/Glass` → "Class and squircle, side by side" is where that
+   * shows up.
+   */
+  .glass,
+  .squircle__surface--glass {
+    @apply bg-glass-md;
+    --glass-rim: url(#glass-rim-md);
+  }
+
+  .glass-sm,
+  .squircle__surface--glass-sm {
+    @apply bg-glass-sm;
+    --glass-rim: url(#glass-rim-sm);
+  }
+  .glass-md,
+  .squircle__surface--glass-md {
+    @apply bg-glass-md;
+    --glass-rim: url(#glass-rim-md);
+  }
+  .glass-lg,
+  .squircle__surface--glass-lg {
+    @apply bg-glass-lg;
+    --glass-rim: url(#glass-rim-lg);
+  }
+
+  .glass-sm {
+    @apply backdrop-blur-sm backdrop-saturate-[1.4];
+  }
+  .glass,
+  .glass-md {
+    @apply backdrop-blur-md backdrop-saturate-[1.6];
+  }
+  .glass-lg {
+    @apply backdrop-blur-xl backdrop-saturate-[1.8];
+  }
+
+  /*
+   * The edge, on two pseudo-elements, because its two halves are drawn in two
+   * blend modes.
+   *
+   * `::before` is the keyline: a one-pixel ring in the shade `glassStroke()`
+   * gives a squircle, which separates white glass from white scenery. It does
+   * not affect layout and survives a `shadow-*` utility replacing the
+   * surface's box-shadow. Keep it on a pseudo-element instead of a border:
+   * adding a real border would change the dimensions of every existing glass
+   * control.
+   *
+   * `::after` is the lit rim: an opaque copy of the box, which the document's
+   * rim filter for the level (`--glass-rim`, set with the wash above, naming
+   * `#glass-rim-sm`, `-md` or `-lg` from `UI/GlassFilters.vue`) turns into
+   * light wherever the edge faces the scene's light, as wide as the level is
+   * thick, and adds to the wash with `plus-lighter`. The filter reads nothing
+   * but the copy's alpha, so its colour does not matter; should the filter be
+   * missing, the copy draws black, which `plus-lighter` adds as nothing. A
+   * squircle's surface draws the same rim (`squircle__surface--rim`) until it
+   * has measured itself and its own chrome takes over.
+   *
+   * **The rim is a child of the box that blurs, and has to be.** A blend
+   * isolates the stacking context it is drawn in, and an isolated group is a
+   * Backdrop Root to Chromium: drawn beside the blurring box rather than inside
+   * it, the rim makes the pair's parent the root of the blur, which then
+   * samples nothing but that parent's own layers and the scenery shows through
+   * the wash unblurred. Inside, it blends with the box's own paint, the blurred
+   * backdrop included.
+   */
+  .glass::before,
+  .glass-sm::before,
+  .glass-md::before,
+  .glass-lg::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    pointer-events: none;
+    background: var(--glass-shade);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+  }
+
+  .glass::after,
+  .glass-sm::after,
+  .glass-md::after,
+  .glass-lg::after,
+  .squircle__surface--rim::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: black;
+    filter: var(--glass-rim, url(#glass-rim-md));
+    mix-blend-mode: plus-lighter;
+  }
+
+  /*
+   * `.glass-track` lays its fill on `::after`, which a `.glass-*` box has
+   * spent on the rim, so on one the track is an inset shadow over the wash
+   * instead — beside the glass shadow it would otherwise replace. On a
+   * squircle's surface it is the pseudo-element, as before.
+   */
+  .glass-track:is(.glass, .glass-sm, .glass-md, .glass-lg) {
+    box-shadow:
+      inset 0 0 0 100vmax theme("colors.fill.2"),
+      theme("boxShadow.glass");
+  }
+
+  /*
+   * The material answers the two settings Apple's does, in both renderers.
+   *
+   * Increase Contrast (`prefers-contrast: more`: macOS and iOS Increase
+   * Contrast, Windows' contrast themes): every level takes the near-opaque
+   * `glassContrastWash`, the keyline turns `line-strong`, and the rim goes,
+   * since a highlight is exactly the low-contrast detail the setting asks to
+   * lose. The blur stays.
+   *
+   * Reduce Transparency (`prefers-reduced-transparency: reduce`, Chromium only
+   * so far): the blur and the wash give way to `surface`, and the rim goes
+   * with them. Glass without its translucency is a white surface and is drawn
+   * as one, keeping its keyline and its shadow — the one place the glass
+   * keyline sits on an opaque fill. The scroll edges keep their fade and lose
+   * their blur.
+   *
+   * The rim's layer stays in both: only what it draws is hidden, so the
+   * squircle's compositing does not change under the setting.
+   */
+  @media (prefers-contrast: more) {
+    .glass,
+    .glass-sm,
+    .glass-md,
+    .glass-lg,
+    .squircle__surface--glass {
+      @apply bg-glass-contrast;
+    }
+
+    .glass::before,
+    .glass-sm::before,
+    .glass-md::before,
+    .glass-lg::before {
+      background: theme("colors.line.strong");
+    }
+
+    .squircle__keyline {
+      stroke: theme("colors.line.strong");
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .glass,
+    .glass-sm,
+    .glass-md,
+    .glass-lg,
+    .squircle__surface--glass {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      background: theme("colors.surface.DEFAULT");
+    }
+  }
+
+  @media (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
+    .squircle__rim path,
+    .glass::after,
+    .glass-sm::after,
+    .glass-md::after,
+    .glass-lg::after,
+    .squircle__surface--rim::before {
+      visibility: hidden;
+    }
+  }
+
+  /*
+   * The overlay fade for every Reka `DialogOverlay` that has not moved to the
+   * singleton `UI/DialogBackdrop` yet — the command palette, the session-expired
+   * dialog and `ChargingStations/AssignLocationDialog`. The command palette's
+   * overlay is visually transparent; its animation keeps that modal hit plane
+   * mounted through the palette's exit. The others paint scrims. These
+   * keyframes live here, not in a component, because that is
+   * exactly how they were lost: both used to be declared in `UI/Dialog.vue`'s
+   * non-scoped block, and when that component dropped its own overlay for the
+   * shared backdrop the keyframes went with it, leaving four *other* overlays
+   * naming an animation that no longer existed.
+   *
+   * That is not the harmless no-op it looks like. An `animation-name` with no
+   * matching `@keyframes` still *computes* to that name, so Reka's `Presence`
+   * reads `animationName !== "none"`, suspends the unmount and waits for an
+   * `animationend` the browser never fires — the overlay is then pinned to
+   * `<body>` for the rest of the session, above every dialog opened after it.
+   * Keep them global; a portalled node cannot see a scoped block anyway.
+   */
+  @keyframes dialogOverlayIn {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes dialogOverlayOut {
+    to {
+      opacity: 0;
+    }
+  }
+
+  /* Fades `--squircle-opacity` rather than `opacity`, because the menu surface
+     is a squircle and its glass is painted on a child layer: an `opacity` here
+     would be a Backdrop Root above that layer for the whole animation, so the
+     blur would read flat and then snap in on the frame the animation lands. See
+     the long note at the top of this file. */
+  @keyframes dropdown-in {
+    from {
+      --squircle-opacity: 0;
+      transform: scale(0.9);
+    }
+    to {
+      --squircle-opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  @keyframes dropdown-out {
+    from {
+      --squircle-opacity: 1;
+      transform: scale(1);
+    }
+    to {
+      --squircle-opacity: 0;
+      transform: scale(0.9);
+    }
+  }
+
+  /*
+   * Open/close behaviour for every floating menu — dropdown menus, context
+   * menus, the Select/MultiSelect listboxes and the place-search combobox.
+   *
+   * Applied by `UI/MenuSurface.vue`, which is also where the menu's *looks*
+   * now live (the squircle, its glass and its padding); this class is only the
+   * part that has to survive being portalled to <body>, where a scoped style
+   * block cannot reach it. Nothing else should apply it — the two halves are
+   * meant to arrive together.
+   */
+  .dropdown-content {
+    /* Reka's Popper flips and re-aligns the menu when it collides with a
+       viewport edge (e.g. right-clicking a marker near the right of the map),
+       so a fixed origin-top-left would grow the scale-in from a corner nowhere
+       near the pointer. Derive the origin from the data-side/data-align pair
+       Popper writes on this element instead.
+
+       Deliberately NOT `transform-origin: var(--reka-popper-transform-origin)`:
+       Reka builds that var by joining floating-ui middleware output that is
+       still undefined until the first measurement, so on the opening frame the
+       var holds an empty value. An empty var() substitution is invalid at
+       computed-value time — and does *not* fall back to a var() default — so
+       transform-origin resets to its 50% 50% initial value and the menu scales
+       out of its own centre. data-side/data-align are populated synchronously
+       from the requested placement, so they are never empty. Plain
+       (non-Popper) users of this class keep the top-left default below.
+
+       This only tells the truth if the menu *flips* on collision rather than
+       sliding over the pointer. Popper runs `shift` before `flip` by default,
+       so a menu opened near the right edge is nudged left in place and keeps
+       reporting data-side="right". Pass `prioritize-position` on the content
+       to reorder those two — see Locations/LocationItemContextMenu.vue. */
+    --dropdown-origin-x: 0%;
+    --dropdown-origin-y: 0%;
+    transform-origin: var(--dropdown-origin-x) var(--dropdown-origin-y);
+
+    /* Placed beside the anchor: the side picks the x edge, the align picks y. */
+    &[data-side="right"] {
+      --dropdown-origin-x: 0%;
+    }
+    &[data-side="left"] {
+      --dropdown-origin-x: 100%;
+    }
+    &[data-side="right"][data-align="center"],
+    &[data-side="left"][data-align="center"] {
+      --dropdown-origin-y: 50%;
+    }
+    &[data-side="right"][data-align="end"],
+    &[data-side="left"][data-align="end"] {
+      --dropdown-origin-y: 100%;
+    }
+
+    /* Placed above/below the anchor: the side picks the y edge, the align x. */
+    &[data-side="bottom"] {
+      --dropdown-origin-y: 0%;
+    }
+    &[data-side="top"] {
+      --dropdown-origin-y: 100%;
+    }
+    &[data-side="top"][data-align="center"],
+    &[data-side="bottom"][data-align="center"] {
+      --dropdown-origin-x: 50%;
+    }
+    &[data-side="top"][data-align="end"],
+    &[data-side="bottom"][data-align="end"] {
+      --dropdown-origin-x: 100%;
+    }
+
+    &[data-state="open"] {
+      animation: dropdown-in 0.1s ease-out;
+    }
+
+    &[data-state="closed"] {
+      animation: dropdown-out 0.1s ease-in forwards;
+      pointer-events: none;
+    }
+  }
+
+  /* `Popover`'s `entrance="reveal"` grows the box itself out of a dot under
+     the pointer (see `runReveal` there), so the scale entrance would fight it.
+     Only the entrance is switched off: the exit above still runs, and
+     `--squircle-opacity` keeps its initial 1, so the dot is glass from its
+     first frame. */
+  .dropdown-content--reveal[data-state="open"] {
+    animation: none;
+  }
+
+  /* A context menu drawn as a sheet (`ContextMenuContent` on a compact
+     viewport) rises from the bottom edge and leaves the same way, rather than
+     growing from the pointer it did not come from. It keeps `.dropdown-content`
+     for its `data-state` hooks and the closed-state pointer-events; only the
+     animation is swapped. A submenu's sheet stacks over it with the same
+     motion. The travel is the sheet's own height and a little more, so the
+     gutter under it is never seen crossing. */
+  .dropdown-content--sheet {
+    &[data-state="open"] {
+      animation: sheet-in theme("transitionDuration.slow")
+        theme("transitionTimingFunction.standard");
+    }
+
+    &[data-state="closed"] {
+      animation: sheet-out theme("transitionDuration.base") theme("transitionTimingFunction.exit")
+        forwards;
+    }
+  }
+
+  @keyframes sheet-in {
+    from {
+      transform: translateY(calc(100% + 1rem));
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes sheet-out {
+    from {
+      transform: translateY(0);
+    }
+    to {
+      transform: translateY(calc(100% + 1rem));
+    }
+  }
+
+  /*
+   * The open/close for a listbox that opens *over* its trigger —
+   * `UI/Select.vue`'s `position="aligned"`, the macOS pop-up button. It replaces
+   * `.dropdown-content` there rather than modifying it, which is why that menu
+   * element carries `.dropdown-aligned` and not both.
+   *
+   * It fades and does not scale, and both halves of that are deliberate.
+   * Reka's item-aligned positioner writes no `data-side`/`data-align` (there is
+   * no side: the menu is on top of the anchor), so `.dropdown-content` above
+   * would fall through to its `0% 0%` default and grow the menu out of a corner
+   * that means nothing — the anchor is the *selected row*, somewhere in the
+   * middle of the list, and its position is only known after the positioner has
+   * measured. A transform-origin derived from it would have to be written back
+   * from JS on the opening frame, which is the class of bug the note above this
+   * one is about. macOS does not scale a pop-up menu either; it fades.
+   *
+   * `--squircle-opacity` rather than `opacity` for the reason `dropdown-in`
+   * gives, and it lives here beside `.dropdown-content` rather than in the
+   * component for the reason `.dropdown-content--panel` gives.
+   */
+  @keyframes dropdown-aligned-in {
+    from {
+      --squircle-opacity: 0;
+    }
+    to {
+      --squircle-opacity: 1;
+    }
+  }
+
+  @keyframes dropdown-aligned-out {
+    from {
+      --squircle-opacity: 1;
+    }
+    to {
+      --squircle-opacity: 0;
+    }
+  }
+
+  /*
+   * Both halves hang off the positioner's *wrapper* — the fixed div Reka puts
+   * around the menu — rather than off the menu element carrying the class, and
+   * that is load-bearing rather than incidental.
+   *
+   * Reka's `Presence` decides whether to hold a closing element mounted by
+   * reading `animation-name` off the one node it was handed, and it ignores an
+   * `animationend` raised by any descendant of it. That node is the outermost
+   * element of the content tree, with a single special case: it steps into
+   * `[data-reka-popper-content-wrapper]` to reach the content inside, which is
+   * why `.dropdown-content` above can sit on the menu itself. The item-aligned
+   * wrapper gets no such step, so an animation declared one level in plays on
+   * the way in and is skipped on the way out — by then the element is already
+   * unmounted. Declared here it is on the node `Presence` watches, and
+   * `--squircle-opacity` inherits from there down into the surface's paint
+   * layers regardless of how many elements are in between.
+   *
+   * `:has()` because that wrapper is Reka's own and carries nothing to hook:
+   * no class, no data attribute, only inline layout. If a future version
+   * changes the nesting the rule stops matching and the menu opens without an
+   * entrance, which is the right way for this to fail.
+   */
+  :has(> .dropdown-aligned) {
+    &:has(> [data-state="open"]) {
+      animation: dropdown-aligned-in theme(transitionDuration.fast)
+        theme(transitionTimingFunction.standard);
+    }
+
+    &:has(> [data-state="closed"]) {
+      animation: dropdown-aligned-out theme(transitionDuration.fast)
+        theme(transitionTimingFunction.exit) forwards;
+      pointer-events: none;
+    }
+  }
+
+  /* `.menu-item`, `.menu-item--destructive` and `.list-item` are registered in
+     `tailwind.config.ts` alongside `.focus-ring` — see the note there. */
+
+  /*
+   * The same open/close, for a large panel holding more than one glass
+   * squircle — the inbox is the only one.
+   *
+   * It fades `--squircle-group-opacity` rather than `--squircle-opacity`
+   * because the detail panel inside animates the per-squircle name for its own
+   * reveal; the two names exist exactly so a container can fade a cluster
+   * without a child shadowing it (see the note at the top of this file). And it
+   * scales from closer to 1: at 22rem by 34rem, the menu's 0.9 would be 3.4rem
+   * of travel where on a menu it is twenty pixels.
+   *
+   * It lives here beside `.dropdown-content` rather than in the component,
+   * because the component's copy of these keyframes is how the insight above
+   * gets lost.
+   */
+  .dropdown-content--panel {
+    &[data-state="open"] {
+      animation: dropdown-panel-in theme(transitionDuration.base)
+        theme(transitionTimingFunction.standard);
+    }
+    &[data-state="closed"] {
+      animation: dropdown-panel-out theme(transitionDuration.fast)
+        theme(transitionTimingFunction.exit) forwards;
+
+      /* The inbox content wrapper is pointer-transparent while its two panels
+         opt back in. Suppress those child overrides during the exit window. */
+      > * {
+        pointer-events: none;
+      }
+    }
+  }
+
+  @keyframes dropdown-panel-in {
+    from {
+      --squircle-group-opacity: 0;
+      transform: scale(0.97);
+    }
+  }
+
+  @keyframes dropdown-panel-out {
+    to {
+      --squircle-group-opacity: 0;
+      transform: scale(0.97);
+    }
+  }
+
+  /*
+   * The disclosure reveal, applied by `UI/CollapsibleContent.vue`.
+   *
+   * It is here rather than in that component for the reason the two blocks
+   * above are: the portal's open/close motion is one vocabulary, and a
+   * component-local copy of a keyframe is how a second one starts. Nothing but
+   * `CollapsibleContent` should apply this class — the animation and the
+   * measured height it travels to arrive together.
+   *
+   * The height comes from `--reka-collapsible-content-height`, which Reka
+   * writes on the element after measuring it with animations suppressed: a
+   * height animation needs a number at both ends, and `auto` is not one. The
+   * var is only ever set by Reka, so the keyframes are inert on anything else.
+   *
+   * `theme()` rather than the literals the menu keyframes above still carry:
+   * these are the tokens `app/utils/motion.ts` holds for `motion-v` callers,
+   * read from the config that keeps the two in step. `reveal` (250ms) is the
+   * step the table already reserves for "height reveals, disclosures" — long
+   * enough that the eye follows the panel rather than being handed it.
+   *
+   * **`standard` in both directions, and deliberately not `exit` on the close.**
+   * `exit` is an ease-*in*: over the same 250ms it is 10% collapsed a quarter of
+   * the way through and 32% at the halfway point, so the panel hangs open and
+   * the whole close reads as far slower than the open — which is 78% done at a
+   * quarter and 95% at halfway. Worse, an ease-in ends at its maximum velocity:
+   * the last stretch of height goes at 1.56× while `standard` is settling at
+   * 0.01×, so the collapse stops dead rather than arriving. That is the right
+   * curve for a menu that scales away in place, where nothing needs to be
+   * readable on the way out — but a collapsing panel is a *travel*, and the
+   * content below it moves the whole way. It belongs under `standard`'s
+   * "anything that slides", in both directions.
+   *
+   * `forwards` on the close is the house rule for a Reka exit (see `CLAUDE.md`
+   * § Reka UI Dialog/Overlay Animations, and both `dropdown-out` blocks above),
+   * and this is exactly the case it exists for: without it the animated height
+   * reverts to its base `auto` the instant the animation ends, and Reka only
+   * applies `hidden` on the *next* render — so the panel flashes back to full
+   * height for a frame on the way out.
+   */
+  .collapsible-panel {
+    overflow: hidden;
+
+    &[data-state="open"] {
+      animation: collapsible-open theme(transitionDuration.reveal)
+        theme(transitionTimingFunction.standard);
+    }
+
+    &[data-state="closed"] {
+      animation: collapsible-close theme(transitionDuration.reveal)
+        theme(transitionTimingFunction.standard) forwards;
+    }
+
+    /* The panel still opens and closes — it just arrives. Height is the whole
+       affordance here, so there is nothing to preserve at a reduced amplitude
+       the way a scale or a slide would have. */
+    @media (prefers-reduced-motion: reduce) {
+      &[data-state="open"],
+      &[data-state="closed"] {
+        animation: none;
+      }
+    }
+  }
+
+  /*
+   * The panel's own padding and margin travel with its height, and they have to.
+   * `box-sizing` is `border-box` portal-wide, so `height: 0` on a panel that
+   * pads itself does not reach zero — padding is a floor the height cannot go
+   * under. A panel with `pt-2 pb-3` bottoms out at 20px, holds that as a strip
+   * of empty card under the trigger, and then loses it in one frame when Reka
+   * applies `hidden`. Margin is the same story from outside the box: it is not
+   * part of the height at all, so it holds its full gap the whole way down.
+   *
+   * Naming them here rather than telling callers not to pad the panel is what
+   * makes the component hard to hold wrong — the first thing that hit this was
+   * this primitive's own story. Each is only stated at the collapsed end, so
+   * the open end interpolates to whatever the caller actually set.
+   */
+  @keyframes collapsible-open {
+    from {
+      height: 0;
+      padding-top: 0;
+      padding-bottom: 0;
+      margin-top: 0;
+      margin-bottom: 0;
+      opacity: 0;
+    }
+    to {
+      height: var(--reka-collapsible-content-height);
+      opacity: 1;
+    }
+  }
+
+  @keyframes collapsible-close {
+    from {
+      height: var(--reka-collapsible-content-height);
+      opacity: 1;
+    }
+    to {
+      height: 0;
+      padding-top: 0;
+      padding-bottom: 0;
+      margin-top: 0;
+      margin-bottom: 0;
+      opacity: 0;
+    }
+  }
+}
+
+#__nuxt {
+  display: contents;
+}
+
+html,
+body {
+  overscroll-behavior: none;
+}
+
+.lasso-selector {
+  @apply border-[1.5px] border-surface-inverse/50 bg-fill-4;
+  pointer-events: none;
+  z-index: 50;
+}
+
+/*
+ * Reduced motion, once, for everything CSS can reach.
+ *
+ * The JavaScript half lives in `utils/motion.ts` (`useMotionTokens`,
+ * `useMotionSpring`) because most of this app's motion is springs. This is the
+ * other half: the shared `@keyframes` above — every dialog scrim, every menu,
+ * every dropdown panel — are declared here precisely because a portalled node
+ * cannot see a scoped block, which also means no component can turn them off.
+ *
+ * **Instant, not slower.** 0.01ms rather than 0 so `transitionend` and
+ * `animationend` still fire for anything that waits on them. Reka's `Presence`
+ * is fine either way — it only skips waiting when `animationName` computes to
+ * `none`, which this deliberately does not do.
+ *
+ * **`animation-iteration-count: 1` is the line that matters**, and the reason
+ * the usual blanket recipe needs an opt-out. Collapsing duration alone would
+ * leave every looping animation running thousands of times a second — the
+ * marquee would strobe, which is worse than the motion the preference was set
+ * to avoid. Capping iterations stops them instead. A
+ * loop that has something to say about itself declares it:
+ *
+ *   - `data-motion="status"` — keep running. Two loops say it, `UI/Spinner.vue`
+ *     and `Ampere/Working.vue`: each is the only sign that work is in flight,
+ *     and each steps rather than sweeps, a `steps(8)` rotation that ticks
+ *     like a clock and three lights stepped in turn. Freezing either turns
+ *     "busy" into "stuck".
+ *   - `data-motion="loop"` — do not run at all, for a decorative loop whose end
+ *     frame is not a resting state. Nothing needs it yet: the marquee stops
+ *     itself in JS and the tool-activity dots in their own media query, both of
+ *     which still work because this only overrides longhands they don't set.
+ *     It is here so the next looping animation has an answer.
+ *
+ * Skeletons predate this and already drop their pulse through
+ * `motion-reduce:animate-none`; that still works, since it is the same query.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    /*
+     * `transition: none`, not a 0.01ms duration — and this one is worth knowing,
+     * because the 0.01ms spelling is what every blanket reduced-motion snippet
+     * on the web uses. `transition-property` defaults to `all`, so setting only
+     * the *duration* does not shorten existing transitions: it switches
+     * transitions **on** for every property of every element that had none. Each
+     * property change then reports its old value for one frame — which showed up
+     * as the browser's default 3px focus ring flashing before ours on any
+     * control that had no transition of its own (`UI/ScrollArea.vue`'s viewport,
+     * a dialog's action). The reduced-motion gate caught it.
+     *
+     * Nothing here waits on `transitionend`: the only dependency that does is
+     * Reka's `Drawer`, which this app does not use. `animationend` is a
+     * different matter and is preserved below.
+     */
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+
+  *:not([data-motion]),
+  *:not([data-motion])::before,
+  *:not([data-motion])::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  [data-motion="loop"] {
+    animation: none !important;
+  }
+}

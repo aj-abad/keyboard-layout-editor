@@ -1,0 +1,26 @@
+{
+  "name": "Keyboard layout editor",
+  "short_name": "Layout editor",
+  "description": "A local keyboard layout editor.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "file_handlers": [
+    {
+      "action": "/?launch",
+      "accept": { "application/json": [".json"] },
+      "launch_type": "multiple-clients"
+    }
+  ],
+  "launch_handler": { "client_mode": "navigate-new" }
+}

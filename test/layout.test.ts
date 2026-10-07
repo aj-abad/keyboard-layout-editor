@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { createKey, deserialize, keyBounds, layoutBounds, parseLayout, serialize, stringifyLayout } from '../app/utils/layout'
+import { createKey, deserialize, keyBounds, layoutBounds, parseLayout, serialize, stringifyLayout, stringifyRows } from '../app/utils/layout'
 import type { Key, Layout } from '../app/utils/layout'
 
 const maps = [
@@ -45,6 +45,18 @@ test('every retained preset imports and roundtrips without geometry or legend lo
     catch (reason) { throw new Error(`Preset ${preset.name}: ${reason instanceof Error ? reason.message : reason}`) }
     assert.equal(new Set(layout.keys.map(key => key.id)).size, layout.keys.length)
   }
+})
+
+test('the JSON tool’s one-row-a-line text reads back as the same layout', () => {
+  const presets = JSON.parse(readFileSync(new URL('../app/data/layouts.json', import.meta.url), 'utf8')).presets as { name: string; data: unknown }[]
+  for (const preset of presets) {
+    const layout = deserialize(preset.data)
+    const text = stringifyRows(layout)
+    const rows = serialize(layout).length
+    assert.equal(text.split('\n').length, rows ? rows + 2 : 1, `${preset.name}: one line a row`)
+    assert.equal(stringifyLayout(parseLayout(text)), stringifyLayout(layout), preset.name)
+  }
+  assert.equal(stringifyRows(deserialize([])), '[]')
 })
 
 test('all eight KLE alignments normalize legend positions, font sizes, and individual colors', () => {

@@ -7,7 +7,7 @@ const round = (value: number) => Math.round(value * 1e6) / 1e6
 const snap = (value: number) => Math.round(value * 4) / 4
 
 /** The union's bounds in the key's unrotated layout coordinates, in units. */
-export function keyResizeBounds(key: Key) {
+export function keyResizeBounds(key: KeyGeometryPatch) {
   const x = key.x + Math.min(0, key.x2)
   const y = key.y + Math.min(0, key.y2)
   return {

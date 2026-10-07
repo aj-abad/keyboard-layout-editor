@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Layout } from '../app/utils/layout'
-import { canvasFrame, escapeXml, keyGeometry, keyIntersectsRect, keyRects, layoutToSvg, pixelKeyBounds, UNIT } from '../app/utils/svg'
+import { canvasFrame, escapeXml, keyGeometry, keyIntersectsRect, keyRects, layoutToSvg, legendSlotAt, legendSlots, pixelKeyBounds, UNIT } from '../app/utils/svg'
 
 function key(overrides: Partial<Layout['keys'][number]> = {}): Layout['keys'][number] {
   return { id: 'test-key', x: 0, y: 0, x2: 0, y2: 0, width: 1, height: 1, width2: 1, height2: 1, rotation_angle: 0, rotation_x: 0, rotation_y: 0, labels: ['A'], textColor: [], textSize: [], default: { textColor: '#111111', textSize: 3 }, color: '#cccccc', profile: '', nub: false, ghost: false, stepped: false, decal: false, ...overrides }
@@ -72,4 +72,44 @@ test('stepped caps retain their full footprint while ghost keys hide legends', (
   assert.ok(layoutToSvg(layout(key({ decal: true, labels: ['DECAL'] }))).includes('DECAL'))
   const empty = canvasFrame(layout())
   assert.ok(empty.width >= UNIT && empty.height >= UNIT)
+})
+
+test('every legend slot has a place to find it, written or blank', () => {
+  const blank = key({ labels: [], width: 2 })
+  const slots = legendSlots(blank)
+  assert.equal(slots.length, 12)
+  const third = (slots[2]!.x - slots[0]!.x) / 3
+  for (const slot of slots) {
+    assert.ok(slot.area.width >= third && slot.area.height > 0, `slot ${slot.slot} has room`)
+    assert.ok(slot.area.x <= slot.x && slot.x <= slot.area.x + slot.area.width, `slot ${slot.slot} holds its anchor`)
+  }
+  // Left, center and right areas in a row don't overlap.
+  assert.ok(slots[0]!.area.x + slots[0]!.area.width <= slots[1]!.area.x + 0.001)
+  assert.ok(slots[1]!.area.x + slots[1]!.area.width <= slots[2]!.area.x + 0.001)
+  // A written legend is drawn where its slot says.
+  const mid = key({ labels: ['', '', '', '', 'Mid'] })
+  const written = keyGeometry(mid).labels[0]!
+  assert.deepEqual([written.x, written.y], [legendSlots(mid)[4]!.x, legendSlots(mid)[4]!.y])
+  assert.equal(legendSlots(key({ profile: 'FLAT' })).length, 9)
+})
+
+test('a point on a cap names the legend under it, or the nearest slot', () => {
+  const cap = key({ labels: [], width: 2 })
+  const slots = legendSlots(cap)
+  const center = (slot: number) => {
+    const { area } = slots[slot]!
+    return { x: area.x + area.width / 2, y: area.y + area.height / 2 }
+  }
+  // Every blank slot answers at its own center.
+  for (const { slot } of slots) assert.equal(legendSlotAt(cap, center(slot)), slot)
+  // The cap's corner, outside every area, names the nearest one.
+  assert.equal(legendSlotAt(cap, { x: 1, y: 1 }), 0)
+  assert.equal(legendSlotAt(cap, { x: 107, y: 53 }), 11)
+  // A long legend's text takes the point from the blank slot it runs over.
+  const long = key({ labels: ['Backspace'], width: 2 })
+  const text = { x: slots[0]!.x, y: slots[0]!.area.y, width: 70, height: slots[0]!.area.height }
+  assert.equal(legendSlotAt(long, center(1), { 0: text }), 0)
+  assert.equal(legendSlotAt(long, center(1)), 1)
+  // Text drawn for a slot that is blank (a stale measure) is not a legend.
+  assert.equal(legendSlotAt(cap, center(1), { 0: text }), 1)
 })
